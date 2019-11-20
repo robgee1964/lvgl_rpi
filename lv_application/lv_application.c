@@ -59,17 +59,19 @@
 #include "../lvgl/lvgl.h"
 #include "../lv_app_conf.h"
 #endif
+#include "lvgl_helper.h"
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 #include "uart.h"
 #include "fs_abs.h"
+#include "uart.h"
 #include "fontAwesomeExtra.h"
 #if LV_USE_APPLICATION
 
 LV_FONT_DECLARE(lv_font_roboto_28)
-LV_FONT_DECLARE(lv_font_roboto_22)
+//LV_FONT_DECLARE(lv_font_roboto_22)
 LV_FONT_DECLARE(fontAwesomeExtra)
 
 
@@ -88,7 +90,8 @@ LV_FONT_DECLARE(fontAwesomeExtra)
 
 #define NUM_SIDEBAR_BUTTONS	5
 
-#define SERIAL_PORT	"/dev/ttyUSB0"
+#define DEF_SERIAL_PORT		"/dev/ttyUSB0"
+#define DEF_SERIAL_BAUD 	115200
 
 /**********************
  *      TYPEDEFS
@@ -97,17 +100,22 @@ LV_FONT_DECLARE(fontAwesomeExtra)
 /**********************
  *  STATIC PROTOTYPES
  **********************/
-static void createControlScreen(int left);
-static void createScopeScreen(int left);
-static void createSettingScreen(int left);
+static bool openSerial(serial_t* pCtx);
+static void createControlScreen(int left, int bottom);
+static void createScopeScreen(int left, int bottom);
+static void createSettingScreen(int left, int bottom);
 static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event);
 static void btn1_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn2_event_cb(lv_obj_t * btn, lv_event_t event);
+static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event);
 static void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event);
+static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event);
+static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event);
 static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
 static void LCD_Off(void);
 static void powerLCD(uint32_t power);
+static void parseSerial(char* msg);
 
 /**********************
  *  STATIC VARIABLES
@@ -119,6 +127,12 @@ static lv_obj_t * contControl;
 static lv_obj_t * contGraph;
 static lv_obj_t * contSettings;
 static lv_obj_t * btnSidebar[NUM_SIDEBAR_BUTTONS];
+static lv_obj_t * lblMsg;
+static lv_obj_t * lblStatus;
+
+static lv_style_t titleStyle;
+static lv_style_t lblOnBgStyle;
+static lv_style_t titleStyle;
 
 static lv_chart_series_t* dl1;
 
@@ -127,10 +141,17 @@ static bool bLCDcontrol = true;
 static int16_t LCDlevel;
 static int16_t LCDpower = POWER_ON;
 
-static int serialDesc;
+static serial_t* pSerCtx;
+static bool bSerialActive = false;
+static char ttyName[128] = DEF_SERIAL_PORT;
+static int ttyBaud = DEF_SERIAL_BAUD;
+
 static int sbWidth;
 
 static const char* sbLabels[NUM_SIDEBAR_BUTTONS] = {APP_HOME_SYMBOL, APP_CHART_SYMBOL, APP_SETTINGS_SYMBOL, NULL, NULL};
+static const char* pBtnMB_OK[] = {"OK", ""};
+static const char ddOptionsBaud[] = "1200\n2400\n4800\n9600\n19200\n38400\n57600\n115200";
+
 /**********************
  *      MACROS
  **********************/
@@ -140,6 +161,7 @@ static const char* sbLabels[NUM_SIDEBAR_BUTTONS] = {APP_HOME_SYMBOL, APP_CHART_S
  **********************/
 void app_tick(void)
 {
+   char rxBuff[256];
 #if 0
    if((lv_tick_elaps(lastTick) >= SCREEN_SLEEP) && (LCDpower == POWER_ON))
    {
@@ -152,8 +174,14 @@ void app_tick(void)
       LCD_Off();
    }
 #endif
-
-   // Update chart data points
+   // Check for received messages from serial port
+   if(serial_gets(pSerCtx, rxBuff) > 0)
+   {
+      lv_label_set_text(lblMsg, rxBuff);
+      lv_obj_realign(lblMsg);
+      parseSerial(rxBuff);
+//		lv_obj_invalidate(lblMsg);
+   }
 
 }
 
@@ -184,20 +212,10 @@ void lv_application(void)
       fscanf(Fpower, "%d", &LCDpower);
    }
 
-   if((serialDesc = open(SERIAL_PORT, O_RDWR)) < 0)
-   {
-      perror("Can't open serial port\r\n");
-      fclose(Fbright);
-      fclose(Fpower);
-      exit(1);
-   }
 
-   const char msg[] = "Raspberry pi HMI\r\n";
-   write(serialDesc, msg, sizeof(msg));
-
-   powerLCD(POWER_ON);
-   lv_disp_trig_activity(NULL);
-
+   lv_style_copy(&titleStyle, &lv_style_pretty_color);
+   titleStyle.text.font = &lv_font_roboto_28;
+   titleStyle.text.color = LV_COLOR_WHITE;
 
 
    // TODO close brightness file on exit
@@ -245,26 +263,55 @@ void lv_application(void)
 
    for (uint32_t i = 0;  i < NUM_SIDEBAR_BUTTONS; i++)
    {
-	  btnSidebar[i] = lv_btn_create(contSidebar, NULL);
+      btnSidebar[i] = lv_btn_create(contSidebar, NULL);
       lbl_btn = lv_label_create(btnSidebar[i], NULL);
       lv_obj_set_style(lbl_btn, &sbBtnStyle);
       lv_obj_set_size(btnSidebar[i], 3*LV_DPI/4, LV_DPI/2);
       if(sbLabels[i] != NULL)
       {
-    	  lv_label_set_text(lbl_btn, sbLabels[i]);
+         lv_label_set_text(lbl_btn, sbLabels[i]);
       }
       lv_obj_set_event_cb(btnSidebar[i],btnSidebar_cb);
    }
 
    sbWidth = lv_obj_get_width(contSidebar);
 
-   createControlScreen(sbWidth);
+   lv_obj_t * contStatus = lv_cont_create(scr, NULL);
+   lv_obj_set_style(contStatus, &lv_style_transp);
+   lv_obj_set_pos(contStatus, sbWidth, lv_disp_get_ver_res(NULL) - LV_DPI/3);
+   lv_cont_set_fit4(contStatus, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_FLOOD);
+   lv_cont_set_layout(contStatus, LV_LAYOUT_OFF);
 
-   createScopeScreen(sbWidth);
+   lblMsg = lv_label_create(contStatus, NULL);
+   lv_style_copy(&lblOnBgStyle, &lv_style_transp);
+   lblOnBgStyle.text.color = LV_COLOR_WHITE;
+   lv_obj_set_style(lblMsg, &lblOnBgStyle);
+   lv_obj_align(lblMsg, contStatus, LV_ALIGN_IN_LEFT_MID, LV_DPI/8, 0);
+   lv_label_set_text(lblMsg, "Serial messages");
+
+   lblStatus = lv_label_create(contStatus, NULL);
+   lv_obj_set_style(contStatus,  &lblOnBgStyle);
+   lv_obj_align(lblStatus, contStatus, LV_ALIGN_IN_RIGHT_MID, -LV_DPI/8, 0);
+   lv_label_set_text(lblStatus, "No comms");
+
+   createControlScreen(sbWidth, lv_disp_get_ver_res(NULL) - LV_DPI/3);
+
+   createScopeScreen(sbWidth, lv_disp_get_ver_res(NULL) - LV_DPI/3);
    lv_obj_set_hidden(contGraph, true);
 
-   createSettingScreen(sbWidth);
+   createSettingScreen(sbWidth, lv_disp_get_ver_res(NULL) - LV_DPI/3);
    lv_obj_set_hidden(contSettings, true);
+
+   // Now attempt to open default serial port
+   pSerCtx = serial_create(NULL);
+
+   bSerialActive = openSerial(pSerCtx);
+
+   const char msgWelcome[] = "Raspberry pi HMI\r\n";
+   serial_send(pSerCtx, msgWelcome, strlen(msg));
+
+   powerLCD(POWER_ON);
+   lv_disp_trig_activity(NULL);
 
    return;
 }
@@ -273,197 +320,248 @@ void lv_application(void)
  *   STATIC FUNCTIONS
  **********************/
 
-static void createControlScreen(int left)
+static bool openSerial(serial_t* pCtx)
 {
-	// Now create container for our main screen
-	contControl = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
-	lv_obj_set_style(contControl, &lv_style_transp);
-	lv_cont_set_layout(contControl, LV_LAYOUT_OFF);
-	//    lv_obj_align(contControl, contSidebar, LV_ALIGN_OUT_RIGHT_TOP, 0, 0;)
-	lv_obj_set_pos(contControl, left, 0);
-	lv_cont_set_fit4(contControl, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_FLOOD);
-
-	lv_style_t *contStyle = (lv_style_t*)lv_obj_get_style(contControl);
-	contStyle->body.padding.inner = LV_DPI/4;
-	lv_obj_set_style(contControl, contStyle);
-
-	/****************
-	 * ADD A TITLE
-	 ****************/
-	lv_obj_t * label1 = lv_label_create(contControl, NULL); /*First parameters (scr) is the parent*/
-	static lv_style_t titleStyle;
-	lv_style_copy(&titleStyle, (lv_style_t*)lv_obj_get_style(label1));
-	titleStyle.text.font = &lv_font_roboto_28;
-	lv_obj_set_style(label1, &titleStyle);
-	lv_label_set_text(label1, msg);  /*Set the text*/
-	lv_obj_align(label1, NULL, LV_ALIGN_IN_TOP_MID, 0, 20);                        /*Set the x coordinate*/
-
-	lv_obj_t * label = lv_label_create(contControl, NULL);
-	lv_label_set_text(label, "Support: hacks@brooks.com");
-	lv_obj_set_x(label, 50);                        /*Set the x coordinate*/
-	lv_obj_align(label, NULL, LV_ALIGN_IN_TOP_LEFT, 20, 50);
-
-	/*Create an animation to move the button continuously left to right*/
-	lv_anim_t a;
-	a.var = label;
-	a.start = lv_obj_get_x(label);
-	a.end = a.start + lv_obj_get_width(contControl) + lv_obj_get_x(contControl);
-	a.exec_cb = (lv_anim_exec_xcb_t)lv_obj_set_x;
-	a.path_cb = lv_anim_path_linear;
-	a.ready_cb = NULL;
-	a.act_time = -1000;                         /*Negative number to set a delay*/
-	a.time = 4000;                               /*Animate in 400 ms*/
-	a.playback = 1;                             /*Make the animation backward too when it's ready*/
-	a.playback_pause = 0;                       /*Wait before playback*/
-	a.repeat = 1;                               /*Repeat the animation*/
-	a.repeat_pause = 500;                       /*Wait before repeat*/
-	lv_anim_create(&a);
-
-
-
-
-	/****************
-	 * ADD A SLIDER
-	 ****************/
-	slider = lv_slider_create(contControl, NULL);                            /*Create a slider*/
-	lv_obj_align(slider, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
-	lv_obj_set_size(slider, LV_DPI / 3, lv_obj_get_height(contControl) *2 / 3);            /*Set the size*/
-	lv_slider_set_range(slider, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
-	/*Set the current value*/
-	lv_slider_set_value(slider, LCDlevel, false);
-	lv_obj_set_event_cb(slider, slider_event_cb);
-
-
-	/***********************
-	 * CREATE TWO BUTTONS
-	 ***********************/
-	/*Create a button*/
-	lv_obj_t * btn1 = lv_btn_create(contControl, NULL);         /*Create a button on the currently loaded screen*/
-	lv_obj_set_event_cb(btn1, btn1_event_cb);                                  /*Set function to be called when the button is released*/
-	lv_obj_align(btn1, slider, LV_ALIGN_OUT_RIGHT_TOP, 30, 0);               /*Align below the label*/
-	lv_obj_set_width(btn1, (LV_DPI*3)/2);
-
-	/*Create a label on the button (the 'label' variable can be reused)*/
-	label = lv_label_create(btn1, NULL);
-	static lv_style_t lblStyle;
-	lv_style_copy(&lblStyle, (lv_style_t*)lv_obj_get_style(label));
-	lblStyle.text.font = &lv_font_roboto_28;
-	lv_obj_set_style(label, &lblStyle);
-
-	//    lv_obj_set_style(label, &lblStyle);
-	lv_label_set_text(label, "Left Button");
-	lv_obj_align(label, btn1, LV_ALIGN_CENTER, 0, 0);
-
-	/*Copy the previous button*/
-	lv_obj_t * btn2 = lv_btn_create(contControl, NULL);                 /*Second parameter is an object to copy*/
-	lv_obj_set_width(btn2, (LV_DPI*3)/2);
-	lv_obj_align(btn2, slider, LV_ALIGN_OUT_RIGHT_BOTTOM, 30, 0);    /*Align next to the prev. button.*/
-	lv_obj_set_event_cb(btn2, btn2_event_cb);                                  /*Set function to be called when the button is released*/
-
-	/*Create a label on the button*/
-	label = lv_label_create(btn2, label);
-	lv_label_set_text(label, "Right Button");
-
-	/* Label for the slider */
-	label = lv_label_create(contControl, NULL);
-	lv_label_set_text(label, "Brightness");
-	lv_obj_align(label, slider, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
-
-	/***********************
-	 * ADD A DROP DOWN LIST
-	 ************************/
-	lv_obj_t * ddlist = lv_ddlist_create(contControl, NULL);                     /*Create a drop down list*/
-	lv_obj_align(ddlist, label, LV_ALIGN_OUT_RIGHT_TOP, 50, 0);         /*Align next to the slider*/
-	lv_obj_set_top(ddlist, true);                                        /*Enable to be on the top when clicked*/
-	lv_ddlist_set_options(ddlist, "None\nLittle\nHalf\nA lot\nAll");     /*Set the options*/
-	lv_obj_set_event_cb(ddlist, ddlist_event_cb);                        /*Set function to call on new option is chosen*/
-
-	return;
+   bool bSuccess = true;
+   if(serial_connect(pCtx, ttyName, ttyBaud) < 0)
+   {
+      lvh_mbox_create_modal(lv_disp_get_scr_act(NULL), NULL, "Can't open serial port", pBtnMB_OK);
+      bSuccess = false;
+   }
+   lv_label_set_text(lblStatus, ttyName);
+   lv_obj_realign(lblStatus);
+   return bSuccess;
 }
 
-static void createScopeScreen(int left)
+
+static void createControlScreen(int left, int bottom)
 {
-	contGraph = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
-	lv_obj_set_style(contGraph, &lv_style_transp);
-	lv_cont_set_layout(contGraph, LV_LAYOUT_OFF);
-	lv_obj_set_pos(contGraph, left, 0);
-	lv_cont_set_fit4(contGraph, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_FLOOD);
+   // Now create container for our main screen
+   contControl = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
+   lv_obj_set_style(contControl, &lv_style_transp);
+   lv_obj_set_height(contControl, bottom);
+   lv_cont_set_layout(contControl, LV_LAYOUT_OFF);
+   //    lv_obj_align(contControl, contSidebar, LV_ALIGN_OUT_RIGHT_TOP, 0, 0;)
+   lv_obj_set_pos(contControl, left, 0);
+   lv_cont_set_fit4(contControl, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_NONE);
 
-	lv_style_t *contStyle = (lv_style_t*)lv_obj_get_style(contGraph);
-	contStyle->body.padding.inner = LV_DPI/4;
-	lv_obj_set_style(contGraph, contStyle);
-	/****************
-	 * CREATE A CHART
-	 ****************/
-	lv_obj_t * chart = lv_chart_create(contGraph, NULL);                   /*Create the chart*/
-	lv_obj_set_size(chart, lv_obj_get_width_fit(contGraph), lv_obj_get_height_fit(contGraph));   /*Set the size*/
-	lv_obj_align(chart, contGraph, LV_ALIGN_CENTER, 0, 0);
-	lv_chart_set_series_width(chart, 2);                                     /*Set the line width*/
-	lv_chart_set_range(chart, -50, 50);
-	lv_chart_set_point_count(chart, 100);
-	lv_chart_set_div_line_count(chart, 10, 10);
-	lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+   lv_style_t *contStyle = (lv_style_t*)lv_obj_get_style(contControl);
+   contStyle->body.padding.inner = LV_DPI/4;
+   lv_obj_set_style(contControl, contStyle);
 
-	/*Add a RED data series and set some points*/
-	dl1 = lv_chart_add_series(chart, LV_COLOR_RED);
+   /****************
+    * ADD A TITLE
+    ****************/
+   lv_obj_t * label1 = lv_label_create(contControl, NULL); /*First parameters (scr) is the parent*/
+   lv_obj_set_style(label1, &titleStyle);
+   lv_label_set_text(label1, msg);  /*Set the text*/
+   lv_obj_align(label1, NULL, LV_ALIGN_IN_TOP_MID, 0, 20);                        /*Set the x coordinate*/
 
-	return;
+   lv_obj_t * label = lv_label_create(contControl, NULL);
+   lv_label_set_text(label, "Support: hacks@brooks.com");
+   lv_obj_set_x(label, 50);                        /*Set the x coordinate*/
+   lv_obj_align(label, NULL, LV_ALIGN_IN_TOP_LEFT, 20, 50);
+
+   /*Create an animation to move the button continuously left to right*/
+   lv_anim_t a;
+   a.var = label;
+   a.start = lv_obj_get_x(label);
+   a.end = a.start + lv_obj_get_width(contControl) + lv_obj_get_x(contControl);
+   a.exec_cb = (lv_anim_exec_xcb_t)lv_obj_set_x;
+   a.path_cb = lv_anim_path_linear;
+   a.ready_cb = NULL;
+   a.act_time = -1000;                         /*Negative number to set a delay*/
+   a.time = 4000;                               /*Animate in 400 ms*/
+   a.playback = 1;                             /*Make the animation backward too when it's ready*/
+   a.playback_pause = 0;                       /*Wait before playback*/
+   a.repeat = 1;                               /*Repeat the animation*/
+   a.repeat_pause = 500;                       /*Wait before repeat*/
+   lv_anim_create(&a);
+
+
+   /****************
+    * ADD A SLIDER
+    ****************/
+   slider = lv_slider_create(contControl, NULL);                            /*Create a slider*/
+   lv_obj_align(slider, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
+   lv_obj_set_size(slider, LV_DPI / 3, lv_obj_get_height(contControl) *2 / 3);            /*Set the size*/
+   lv_slider_set_range(slider, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+   /*Set the current value*/
+   lv_slider_set_value(slider, LCDlevel, false);
+   lv_obj_set_event_cb(slider, slider_event_cb);
+
+
+   /***********************
+    * CREATE TWO BUTTONS
+    ***********************/
+   /*Create a button*/
+   lv_obj_t * btn1 = lv_btn_create(contControl, NULL);         /*Create a button on the currently loaded screen*/
+   lv_obj_set_event_cb(btn1, btn1_event_cb);                                  /*Set function to be called when the button is released*/
+   lv_obj_align(btn1, slider, LV_ALIGN_OUT_RIGHT_TOP, 30, 0);               /*Align below the label*/
+   lv_obj_set_width(btn1, (LV_DPI*3)/2);
+
+   /*Create a label on the button (the 'label' variable can be reused)*/
+   label = lv_label_create(btn1, NULL);
+   static lv_style_t lblStyle;
+   lv_style_copy(&lblStyle, (lv_style_t*)lv_obj_get_style(label));
+   lblStyle.text.font = &lv_font_roboto_28;
+   lv_obj_set_style(label, &lblStyle);
+
+   //    lv_obj_set_style(label, &lblStyle);
+   lv_label_set_text(label, "Left Button");
+   lv_obj_align(label, btn1, LV_ALIGN_CENTER, 0, 0);
+
+   /*Copy the previous button*/
+   lv_obj_t * btn2 = lv_btn_create(contControl, NULL);                 /*Second parameter is an object to copy*/
+   lv_obj_set_width(btn2, (LV_DPI*3)/2);
+   lv_obj_align(btn2, slider, LV_ALIGN_OUT_RIGHT_BOTTOM, 30, 0);    /*Align next to the prev. button.*/
+   lv_obj_set_event_cb(btn2, btn2_event_cb);                                  /*Set function to be called when the button is released*/
+
+   /*Create a label on the button*/
+   label = lv_label_create(btn2, label);
+   lv_label_set_text(label, "Right Button");
+
+   /* Label for the slider */
+   label = lv_label_create(contControl, NULL);
+   lv_label_set_text(label, "Brightness");
+   lv_obj_align(label, slider, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
+
+   /***********************
+    * ADD A DROP DOWN LIST
+    ************************/
+   lv_obj_t * ddlist = lv_ddlist_create(contControl, NULL);                     /*Create a drop down list*/
+   lv_obj_align(ddlist, label, LV_ALIGN_OUT_RIGHT_TOP, 50, 0);         /*Align next to the slider*/
+   lv_obj_set_top(ddlist, true);                                        /*Enable to be on the top when clicked*/
+   lv_ddlist_set_options(ddlist, "None\nLittle\nHalf\nA lot\nAll");     /*Set the options*/
+   lv_obj_set_event_cb(ddlist, ddlist_event_cb);                        /*Set function to call on new option is chosen*/
+
+   return;
+}
+
+static void createScopeScreen(int left, int bottom)
+{
+   contGraph = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
+   lv_obj_set_style(contGraph, &lv_style_transp);
+   lv_obj_set_height(contGraph, bottom);
+   lv_cont_set_layout(contGraph, LV_LAYOUT_OFF);
+   lv_obj_set_pos(contGraph, left, 0);
+   lv_cont_set_fit4(contGraph, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_NONE);
+
+   lv_style_t *contStyle = (lv_style_t*)lv_obj_get_style(contGraph);
+   contStyle->body.padding.inner = LV_DPI/4;
+   lv_obj_set_style(contGraph, contStyle);
+   /****************
+    * CREATE A CHART
+    ****************/
+   lv_obj_t * chart = lv_chart_create(contGraph, NULL);                   /*Create the chart*/
+   lv_obj_set_size(chart, lv_obj_get_width_fit(contGraph), lv_obj_get_height_fit(contGraph));   /*Set the size*/
+   lv_obj_align(chart, contGraph, LV_ALIGN_CENTER, 0, 0);
+   lv_chart_set_series_width(chart, 2);                                     /*Set the line width*/
+   lv_chart_set_range(chart, -50, 50);
+   lv_chart_set_point_count(chart, 100);
+   lv_chart_set_div_line_count(chart, 10, 10);
+   lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+
+   /*Add a RED data series and set some points*/
+   dl1 = lv_chart_add_series(chart, LV_COLOR_RED);
+
+   return;
 #if 0
-	lv_chart_set_next(chart, dl1, 10);
-	lv_chart_set_next(chart, dl1, 25);
-	lv_chart_set_next(chart, dl1, 45);
-	lv_chart_set_next(chart, dl1, 80);
+   lv_chart_set_next(chart, dl1, 10);
+   lv_chart_set_next(chart, dl1, 25);
+   lv_chart_set_next(chart, dl1, 45);
+   lv_chart_set_next(chart, dl1, 80);
 
-	/*Add a BLUE data series and set some points*/
-	lv_chart_series_t * dl2 = lv_chart_add_series(chart, lv_color_make(0x40, 0x70, 0xC0));
-	lv_chart_set_next(chart, dl2, 10);
-	lv_chart_set_next(chart, dl2, 25);
-	lv_chart_set_next(chart, dl2, 45);
-	lv_chart_set_next(chart, dl2, 80);
-	lv_chart_set_next(chart, dl2, 75);
-	lv_chart_set_next(chart, dl2, 90);
+   /*Add a BLUE data series and set some points*/
+   lv_chart_series_t * dl2 = lv_chart_add_series(chart, lv_color_make(0x40, 0x70, 0xC0));
+   lv_chart_set_next(chart, dl2, 10);
+   lv_chart_set_next(chart, dl2, 25);
+   lv_chart_set_next(chart, dl2, 45);
+   lv_chart_set_next(chart, dl2, 80);
+   lv_chart_set_next(chart, dl2, 75);
+   lv_chart_set_next(chart, dl2, 90);
 #endif
 }
 
-static void createSettingScreen(int left)
+static void createSettingScreen(int left, int bottom)
 {
-	contSettings = lv_cont_create(scr, NULL);
-	lv_obj_set_style(contSettings, &lv_style_transp);
-	lv_obj_set_pos(contSettings, left, 0);
-	lv_cont_set_fit4(contSettings, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_FLOOD);
-	lv_cont_set_layout(contSettings, LV_LAYOUT_CENTER);
+   contSettings = lv_cont_create(scr, NULL);
+   lv_obj_set_style(contSettings, &lv_style_transp);
+   lv_obj_set_height(contSettings, bottom);
+   lv_obj_set_pos(contSettings, left, 0);
+   lv_cont_set_fit4(contSettings, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_NONE);
+   lv_cont_set_layout(contSettings, LV_LAYOUT_OFF);
 
 
-	// TODO create drop downs for serial port and baud rate
-	lv_obj_t *label = lv_label_create(contSettings, NULL);
-	lv_label_set_text(label, "settings");
+   // create drop downs for serial port
+   lv_obj_t *label = lv_label_create(contSettings, NULL);
+   lv_obj_set_style(label, &titleStyle);
+   lv_label_set_text(label, "settings");
+   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_MID, 0, 10);
+
+   label = lv_label_create(contSettings, NULL);
+   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_LEFT, LV_DPI/8, LV_DPI/3);
+   lv_obj_set_width(label, LV_DPI/2);
+   lv_obj_set_style(label, &lblOnBgStyle);
+   lv_label_set_text(label, "Serial");
+
+   lv_obj_t *ddListPort = lv_ddlist_create(contSettings, NULL);
+   lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+
+   lv_obj_t *btnPort = lv_btn_create(contSettings, NULL);
+   lv_obj_set_width(btnPort, LV_DPI/3);
+   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+   lv_obj_t* lblBtn = lv_label_create(btnPort, NULL);
+   lv_label_set_text(lblBtn, "Open");
+   lv_obj_set_event_cb(btnPort, btn_port_event_cb);
+
+   // Now populate list
+   char *ptty = ls_tty();
+   if(ptty != NULL)
+   {
+      lv_ddlist_set_options(ddListPort, ptty);
+      free(ptty);
+   }
+   lv_obj_set_event_cb(ddListPort, ddl_port_event_cb);
+
+   // create drop down for baud rate
+   lv_obj_t * label1 = lv_label_create(contSettings, NULL);
+   lv_obj_align(label1, label, LV_ALIGN_IN_TOP_LEFT, 0, LV_DPI/3);
+   lv_obj_set_width(label, LV_DPI/2);
+   lv_label_set_text(label1, LV_DPI/2);
+
+   lv_obj_t * ddListBaud = lv_ddlist_create(contSettings, NULL);
+   lv_obj_align(ddListBaud, label1, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+
+   lv_ddlist_set_options(ddListBaud, ddOptionsBaud);
+   lv_obj_set_event_cb(ddListBaud, ddl_baud_event_cb);
 }
 
 
 static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event)
 {
-	// work out button index
-	if(event == LV_EVENT_RELEASED)
-	{
-		if(btn == btnSidebar[0])
-		{
-		   lv_obj_set_hidden(contGraph, true);
-		   lv_obj_set_hidden(contSettings, true);
-		   lv_obj_set_hidden(contControl, false);
-		}
-		else if(btn == btnSidebar[1])
-		{
-		   lv_obj_set_hidden(contControl, true);
-		   lv_obj_set_hidden(contSettings, true);
-		   lv_obj_set_hidden(contGraph, false);
-		}
-		else if(btn == btnSidebar[2])
-		{
-		   lv_obj_set_hidden(contGraph, true);
-		   lv_obj_set_hidden(contControl, true);
-		   lv_obj_set_hidden(contSettings, false);
-		}
-	}
+   // work out button index
+   if(event == LV_EVENT_RELEASED)
+   {
+      if(btn == btnSidebar[0])
+      {
+         lv_obj_set_hidden(contGraph, true);
+         lv_obj_set_hidden(contSettings, true);
+         lv_obj_set_hidden(contControl, false);
+      }
+      else if(btn == btnSidebar[1])
+      {
+         lv_obj_set_hidden(contControl, true);
+         lv_obj_set_hidden(contSettings, true);
+         lv_obj_set_hidden(contGraph, false);
+      }
+      else if(btn == btnSidebar[2])
+      {
+         lv_obj_set_hidden(contGraph, true);
+         lv_obj_set_hidden(contControl, true);
+         lv_obj_set_hidden(contSettings, false);
+      }
+   }
 }
 
 
@@ -477,7 +575,7 @@ static void btn1_event_cb(lv_obj_t * btn, lv_event_t event)
 {
    const char msg[] = "Button 1 pressed\r\n";
    if(event == LV_EVENT_RELEASED) {
-      write(serialDesc, msg, strlen(msg));
+      serial_send(pSerCtx, msg, strlen(msg));
    }
 }
 
@@ -486,9 +584,18 @@ static void btn2_event_cb(lv_obj_t * btn, lv_event_t event)
 {
    const char msg[] = "Button 2 pressed\r\n";
    if(event == LV_EVENT_RELEASED) {
-      write(serialDesc, msg, strlen(msg));
+      serial_send(pSerCtx, msg, strlen(msg));
    }
 }
+
+static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event)
+{
+   if(event == LV_EVENT_RELEASED)
+   {
+      // TODO close, then open port with new parameters
+   }
+}
+
 /**
  * Called when a new option is chosen in the drop down list
  * @param ddlist pointer to the drop down list
@@ -504,6 +611,25 @@ static  void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event)
    }
 
 }
+
+static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event)
+{
+   if(event == LV_EVENT_VALUE_CHANGED)
+   {
+      lv_ddlist_get_selected_str(ddlist, ttyName, sizeof(ttyName));
+   }
+}
+
+static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event)
+{
+   if(event == LV_EVENT_VALUE_CHANGED)
+   {
+      char numStr[20];
+      lv_ddlist_get_selected_str(ddlist, numStr, sizeof(numStr));
+      ttyBaud = atol(numStr);
+   }
+}
+
 
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event)
 {
@@ -550,5 +676,33 @@ static void powerLCD(uint32_t power)
    LCDpower = power;
 }
 
+static void parseSerial(char* msg)
+{
+   static char delims[] = " ,\t:";
+   char * pTok;
 
-#endif /*LV_USE_TUTORIALS*/
+   pTok = strtok(msg, delims);
+
+   if(!strcmp(pTok, "slider"))
+   {
+      pTok = strtok(NULL, delims);
+
+      int val = strtol(pTok, NULL, 10);
+
+      if(val <= lv_slider_get_max_value(slider))
+      {
+         lv_slider_set_value(slider, val, LV_ANIM_ON);
+      }
+   }
+   else if(!strcmp(pTok, "wake"))
+   {
+      lv_obj_del(btnWake);
+      powerLCD(POWER_ON);
+      lv_disp_trig_activity(NULL);
+   }
+
+}
+
+#endif // LV_USE_APPLICATION
+
+

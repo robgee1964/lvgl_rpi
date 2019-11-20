@@ -9,8 +9,6 @@
 #include <stdbool.h>
 #include <lv_application/lv_application.h>
 #include "lv_examples/lv_apps/tpcal/tpcal.h"
-#include <lv_examples/lv_tutorial/4_themes/lv_tutorial_themes.h>
-#include <lv_examples/lv_tutorial/6_images/lv_tutorial_images.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include "buzzer.h"
@@ -91,8 +89,6 @@ int main(void)
 
 
     lv_application();
-//    lv_tutorial_themes();
-//    lv_tutorial_image();
 
 
 #if EVDEV_CALIBRATE
