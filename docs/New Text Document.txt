@@ -1,0 +1,10 @@
+To push repo up to github
+
+1) if its a freshly created repo then open gitbash at your local repo and type 
+
+ git remote add origin https://github.com/robgee1964/lvgl.git
+ 
+2) to push, simply do 
+ git push -u origin master
+ 
+ 
