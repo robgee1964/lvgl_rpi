@@ -14,6 +14,8 @@
 #include "../lv_app_conf.h"
 #endif
 
+#include <string.h>
+#include <stdlib.h>
 #include "lvgl_helper.h"
 
 static lv_obj_t * mbox;
@@ -52,6 +54,33 @@ void lvh_mbox_create_modal(lv_obj_t * parent, const lv_obj_t * copy, const char*
    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
    lv_anim_set_exec_cb(&a, obj, (lv_anim_exec_xcb_t)lv_obj_set_opa_scale);
    lv_anim_create(&a);
+}
+
+/**
+ * @brief locates string in ddlist items
+ */
+int lvh_ddlist_set_selected_str(lv_obj_t * ddlist, const char* item)
+{
+   char* opt_str = malloc(strlen(lv_ddlist_get_options(ddlist))+1);
+   strcpy(opt_str, lv_ddlist_get_options(ddlist));
+   const char delim[] = "\n";
+   const char* ptok;
+   int index = 0;
+   int status = -1;
+
+   ptok = strtok((char*)opt_str, delim);
+   while((ptok != NULL) && strcmp(ptok, item))
+   {
+      ptok = strtok(NULL, delim);
+      index++;
+   }
+   if(ptok != NULL)
+   {
+      lv_ddlist_set_selected(ddlist, index);
+      status =  0;
+   }
+   free(opt_str);
+   return status;
 }
 
 

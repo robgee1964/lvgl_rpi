@@ -15,6 +15,11 @@ extern "C" {
 
    typedef struct serial_s serial_t;
 
+   typedef struct
+   {
+
+   }ser_param_t ;
+
    /**
     * Create the serial structure.
     * Convenience method to allocate memory
@@ -38,11 +43,19 @@ extern "C" {
    int serial_connect(serial_t* s, char device[], int baud);
 
    /**
+    * Set port parameters.
+    * @param s - serial structure.
+    * @param pParam - pointer to struct containing baud, data len, parity etc.
+    * @param length - size of the data array.
+    */
+   int serial_set_params(serial_t* s, ser_param_t* pParam);
+   /**
     * Send data.
     * @param s - serial structure.
     * @param data - character array to transmit.
     * @param length - size of the data array.
     */
+
    int serial_send(serial_t* s, const uint8_t data[], int length);
 
    /**

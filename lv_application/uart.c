@@ -143,6 +143,12 @@ int serial_connect(serial_t* s, char device[], int baud)
    return 0;
 }
 
+
+int serial_set_params(serial_t* s, ser_param_t* pParam)
+{
+
+}
+
 //Send data.
 int serial_send(serial_t* s, const uint8_t data[], int length)
 {

@@ -108,11 +108,11 @@ static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event);
 static void btn1_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn2_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event);
+static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
 static void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event);
-static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
 static void LCD_Off(void);
 static void powerLCD(uint32_t power);
 static void parseSerial(char* msg);
@@ -215,6 +215,7 @@ void lv_application(void)
 
    lv_style_copy(&titleStyle, &lv_style_pretty_color);
    titleStyle.text.font = &lv_font_roboto_28;
+   titleStyle.body.opa = LV_OPA_50;
    titleStyle.text.color = LV_COLOR_WHITE;
 
 
@@ -290,7 +291,7 @@ void lv_application(void)
    lv_label_set_text(lblMsg, "Serial messages");
 
    lblStatus = lv_label_create(contStatus, NULL);
-   lv_obj_set_style(contStatus,  &lblOnBgStyle);
+   lv_obj_set_style(lblStatus,  &lblOnBgStyle);
    lv_obj_align(lblStatus, contStatus, LV_ALIGN_IN_RIGHT_MID, -LV_DPI/8, 0);
    lv_label_set_text(lblStatus, "No comms");
 
@@ -323,12 +324,22 @@ void lv_application(void)
 static bool openSerial(serial_t* pCtx)
 {
    bool bSuccess = true;
+   char msg[40];
    if(serial_connect(pCtx, ttyName, ttyBaud) < 0)
    {
-      lvh_mbox_create_modal(lv_disp_get_scr_act(NULL), NULL, "Can't open serial port", pBtnMB_OK);
+      sprintf(msg, "Cannot open port:\n%s", ttyName);
+      lvh_mbox_create_modal(lv_disp_get_scr_act(NULL), NULL, msg, pBtnMB_OK);
       bSuccess = false;
    }
-   lv_label_set_text(lblStatus, ttyName);
+   if(bSuccess)
+   {
+      sprintf(msg, "%s-%d", ttyName, ttyBaud);
+      lv_label_set_text(lblStatus, msg);
+   }
+   else
+   {
+      lv_label_set_text(lblStatus, "Not connected");
+   }
    lv_obj_realign(lblStatus);
    return bSuccess;
 }
@@ -354,6 +365,7 @@ static void createControlScreen(int left, int bottom)
     ****************/
    lv_obj_t * label1 = lv_label_create(contControl, NULL); /*First parameters (scr) is the parent*/
    lv_obj_set_style(label1, &titleStyle);
+   lv_label_set_body_draw(label1, true);
    lv_label_set_text(label1, msg);  /*Set the text*/
    lv_obj_align(label1, NULL, LV_ALIGN_IN_TOP_MID, 0, 20);                        /*Set the x coordinate*/
 
@@ -492,25 +504,27 @@ static void createSettingScreen(int left, int bottom)
    lv_cont_set_fit4(contSettings, LV_FIT_NONE, LV_FIT_FLOOD, LV_FIT_NONE, LV_FIT_NONE);
    lv_cont_set_layout(contSettings, LV_LAYOUT_OFF);
 
-
-   // create drop downs for serial port
    lv_obj_t *label = lv_label_create(contSettings, NULL);
    lv_obj_set_style(label, &titleStyle);
-   lv_label_set_text(label, "settings");
+   lv_label_set_body_draw(label, true);
+   lv_label_set_text(label, "Settings");
    lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_MID, 0, 10);
 
    label = lv_label_create(contSettings, NULL);
-   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_LEFT, LV_DPI/8, LV_DPI/3);
+   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_LEFT, LV_DPI/8, LV_DPI/2);
    lv_obj_set_width(label, LV_DPI/2);
    lv_obj_set_style(label, &lblOnBgStyle);
    lv_label_set_text(label, "Serial");
 
+   // create drop downs for serial port
    lv_obj_t *ddListPort = lv_ddlist_create(contSettings, NULL);
    lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+   lv_ddlist_set_fix_width(ddListPort, 250);
+   lv_ddlist_set_draw_arrow(ddListPort, true);
 
    lv_obj_t *btnPort = lv_btn_create(contSettings, NULL);
-   lv_obj_set_width(btnPort, LV_DPI/3);
-   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+   lv_obj_set_size(btnPort, 3*LV_DPI/4, LV_DPI/3);
+   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
    lv_obj_t* lblBtn = lv_label_create(btnPort, NULL);
    lv_label_set_text(lblBtn, "Open");
    lv_obj_set_event_cb(btnPort, btn_port_event_cb);
@@ -522,18 +536,25 @@ static void createSettingScreen(int left, int bottom)
       lv_ddlist_set_options(ddListPort, ptty);
       free(ptty);
    }
+   lvh_ddlist_set_selected_str(ddListPort, ttyName);
    lv_obj_set_event_cb(ddListPort, ddl_port_event_cb);
 
    // create drop down for baud rate
    lv_obj_t * label1 = lv_label_create(contSettings, NULL);
-   lv_obj_align(label1, label, LV_ALIGN_IN_TOP_LEFT, 0, LV_DPI/3);
-   lv_obj_set_width(label, LV_DPI/2);
-   lv_label_set_text(label1, LV_DPI/2);
+   lv_obj_align(label1, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_set_width(label1, LV_DPI/2);
+   lv_obj_set_style(label1, &lblOnBgStyle);
+   lv_label_set_text(label1, "Baud");
 
    lv_obj_t * ddListBaud = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListBaud, label1, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+   lv_obj_align(ddListBaud, ddListPort, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
 
    lv_ddlist_set_options(ddListBaud, ddOptionsBaud);
+   lv_ddlist_set_fix_width(ddListBaud, 150);
+   lv_ddlist_set_draw_arrow(ddListBaud, true);
+   char buff[20];
+   sprintf(buff, "%d", ttyBaud);
+   lvh_ddlist_set_selected_str(ddListBaud, buff);
    lv_obj_set_event_cb(ddListBaud, ddl_baud_event_cb);
 }
 
@@ -593,6 +614,19 @@ static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event)
    if(event == LV_EVENT_RELEASED)
    {
       // TODO close, then open port with new parameters
+      serial_close(pSerCtx);
+      bSerialActive = false;
+      usleep(50000);
+      bSerialActive = openSerial(pSerCtx);
+   }
+}
+
+static void btn_wake_cb(lv_obj_t * button, lv_event_t event)
+{
+   if(event == LV_EVENT_RELEASED)
+   {
+      lv_obj_del(btnWake);
+      powerLCD(POWER_ON);
    }
 }
 
@@ -614,7 +648,11 @@ static  void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event)
 
 static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event)
 {
-   if(event == LV_EVENT_VALUE_CHANGED)
+   if(event == LV_EVENT_PRESSED)
+   {
+      lv_obj_set_top(ddlist, true);
+   }
+   else if(event == LV_EVENT_VALUE_CHANGED)
    {
       lv_ddlist_get_selected_str(ddlist, ttyName, sizeof(ttyName));
    }
@@ -622,7 +660,11 @@ static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event)
 
 static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event)
 {
-   if(event == LV_EVENT_VALUE_CHANGED)
+   if(event == LV_EVENT_PRESSED)
+   {
+      lv_obj_set_top(ddlist, true);
+   }
+   else if(event == LV_EVENT_VALUE_CHANGED)
    {
       char numStr[20];
       lv_ddlist_get_selected_str(ddlist, numStr, sizeof(numStr));
@@ -642,15 +684,6 @@ static void slider_event_cb(lv_obj_t * slider, lv_event_t event)
    }
 }
 
-
-static void btn_wake_cb(lv_obj_t * button, lv_event_t event)
-{
-   if(event == LV_EVENT_RELEASED)
-   {
-      lv_obj_del(btnWake);
-      powerLCD(POWER_ON);
-   }
-}
 
 static void LCD_Off(void)
 {

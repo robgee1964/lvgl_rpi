@@ -12,4 +12,6 @@
 
 void lvh_mbox_create_modal(lv_obj_t * parent, const lv_obj_t * copy, const char* pMsg, const char** pButtons);
 
+int lvh_ddlist_set_selected_str(lv_obj_t * ddlist, const char* item);
+
 #endif /* LV_APPLICATION_LVGL_HELPER_H_ */
