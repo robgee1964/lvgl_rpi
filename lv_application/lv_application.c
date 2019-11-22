@@ -92,6 +92,9 @@ LV_FONT_DECLARE(fontAwesomeExtra)
 
 #define DEF_SERIAL_PORT		"/dev/ttyUSB0"
 #define DEF_SERIAL_BAUD 	115200
+#define DEF_STOPBITS       STOPBITS_1
+#define DEF_PARITY         PARITY_NONE
+#define DEF_DATABITS       8
 
 /**********************
  *      TYPEDEFS
@@ -101,9 +104,9 @@ LV_FONT_DECLARE(fontAwesomeExtra)
  *  STATIC PROTOTYPES
  **********************/
 static bool openSerial(serial_t* pCtx);
-static void createControlScreen(int left, int bottom);
-static void createScopeScreen(int left, int bottom);
-static void createSettingScreen(int left, int bottom);
+static void createControlScreen(int32_t left, int32_t bottom);
+static void createScopeScreen(int32_t left, int32_t bottom);
+static void createSettingScreen(int32_t left, int32_t bottom);
 static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event);
 static void btn1_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn2_event_cb(lv_obj_t * btn, lv_event_t event);
@@ -112,6 +115,9 @@ static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
 static void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event);
+static void ddl_databits_event_cb(lv_obj_t * ddlist, lv_event_t event);
+static void ddl_parity_event_cb(lv_obj_t * ddlist, lv_event_t event);
+static void ddl_stopbits_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event);
 static void LCD_Off(void);
 static void powerLCD(uint32_t power);
@@ -143,14 +149,17 @@ static int16_t LCDpower = POWER_ON;
 
 static serial_t* pSerCtx;
 static bool bSerialActive = false;
+static ser_param_t ttyParams = {DEF_SERIAL_BAUD, DEF_STOPBITS, DEF_PARITY, DEF_DATABITS};
 static char ttyName[128] = DEF_SERIAL_PORT;
-static int ttyBaud = DEF_SERIAL_BAUD;
 
-static int sbWidth;
+static int32_t sbWidth;
 
 static const char* sbLabels[NUM_SIDEBAR_BUTTONS] = {APP_HOME_SYMBOL, APP_CHART_SYMBOL, APP_SETTINGS_SYMBOL, NULL, NULL};
 static const char* pBtnMB_OK[] = {"OK", ""};
 static const char ddOptionsBaud[] = "1200\n2400\n4800\n9600\n19200\n38400\n57600\n115200";
+static const char ddOptionsDatabits[] = "5\n6\n7\n8";
+static const char ddOptionsParity[] = "none\nodd\neven\nspace";
+static const char ddOptionsStopbits[] = "1\n2";
 
 /**********************
  *      MACROS
@@ -325,7 +334,7 @@ static bool openSerial(serial_t* pCtx)
 {
    bool bSuccess = true;
    char msg[40];
-   if(serial_connect(pCtx, ttyName, ttyBaud) < 0)
+   if(serial_connect(pCtx, ttyName, ttyParams.baud) < 0)
    {
       sprintf(msg, "Cannot open port:\n%s", ttyName);
       lvh_mbox_create_modal(lv_disp_get_scr_act(NULL), NULL, msg, pBtnMB_OK);
@@ -333,7 +342,7 @@ static bool openSerial(serial_t* pCtx)
    }
    if(bSuccess)
    {
-      sprintf(msg, "%s-%d", ttyName, ttyBaud);
+      sprintf(msg, "%s-%d", ttyName, ttyParams.baud);
       lv_label_set_text(lblStatus, msg);
    }
    else
@@ -345,7 +354,7 @@ static bool openSerial(serial_t* pCtx)
 }
 
 
-static void createControlScreen(int left, int bottom)
+static void createControlScreen(int32_t left, int32_t bottom)
 {
    // Now create container for our main screen
    contControl = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
@@ -450,7 +459,7 @@ static void createControlScreen(int left, int bottom)
    return;
 }
 
-static void createScopeScreen(int left, int bottom)
+static void createScopeScreen(int32_t left, int32_t bottom)
 {
    contGraph = lv_cont_create(lv_disp_get_scr_act(NULL), NULL);
    lv_obj_set_style(contGraph, &lv_style_transp);
@@ -495,7 +504,7 @@ static void createScopeScreen(int left, int bottom)
 #endif
 }
 
-static void createSettingScreen(int left, int bottom)
+static void createSettingScreen(int32_t left, int32_t bottom)
 {
    contSettings = lv_cont_create(scr, NULL);
    lv_obj_set_style(contSettings, &lv_style_transp);
@@ -524,7 +533,7 @@ static void createSettingScreen(int left, int bottom)
 
    lv_obj_t *btnPort = lv_btn_create(contSettings, NULL);
    lv_obj_set_size(btnPort, 3*LV_DPI/4, LV_DPI/3);
-   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
+   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
    lv_obj_t* lblBtn = lv_label_create(btnPort, NULL);
    lv_label_set_text(lblBtn, "Open");
    lv_obj_set_event_cb(btnPort, btn_port_event_cb);
@@ -553,9 +562,46 @@ static void createSettingScreen(int left, int bottom)
    lv_ddlist_set_fix_width(ddListBaud, 150);
    lv_ddlist_set_draw_arrow(ddListBaud, true);
    char buff[20];
-   sprintf(buff, "%d", ttyBaud);
+   sprintf(buff, "%d", ttyParams.baud);
    lvh_ddlist_set_selected_str(ddListBaud, buff);
    lv_obj_set_event_cb(ddListBaud, ddl_baud_event_cb);
+
+   // create drop down list for parity
+   lv_obj_t * ddListParity = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_align(ddListParity, btnPort, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_options(ddListParity, ddOptionsParity);
+   // Set default selection - this will break if enum values or sequence in ddOptionsParity change
+   lv_ddlist_set_selected(ddListParity, (uint16_t)ttyParams.parity);
+   lv_obj_set_event_cb(ddListParity, ddl_parity_event_cb);
+   // label for parity
+   label = lv_label_create(contSettings, label1);
+   lv_obj_align(label, ddListBaud, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
+   lv_label_set_text(label, "Parity");
+
+   // Create drop down list for data bits
+   lv_obj_t * ddListDatabits = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_align(ddListDatabits, ddListBaud, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_options(ddListDatabits, ddOptionsDatabits);
+   // set default selection, this will break if enum values or sequence in ddOptionsDatabits change
+   lv_ddlist_set_selected(ddListDatabits, ttyParams.databits-5);
+   lv_obj_set_event_cb(ddListDatabits, ddl_databits_event_cb);
+   // label for databits
+   label = lv_label_create(contSettings, label1);
+   lv_obj_align(label, label1, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_label_set_text(label, "Data\nbits");
+
+   // Create drop down list for stop bits
+   lv_obj_t * ddListStopbits = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_align(ddListStopbits, ddListParity, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_options(ddListStopbits, ddOptionsStopbits);
+   // set default selection, this will break if enum changes or sequence in ddOptionsStopbits
+   lv_ddlist_set_selected(ddListStopbits, ttyParams.stopbits);
+   lv_obj_set_event_cb(ddListStopbits, ddl_stopbits_event_cb);
+   // label for stopbits
+   label = lv_label_create(contSettings, label1);
+   lv_obj_align(label, ddListDatabits, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
+   lv_label_set_text(label, "Stop\nbits");
+
 }
 
 
@@ -618,6 +664,10 @@ static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event)
       bSerialActive = false;
       usleep(50000);
       bSerialActive = openSerial(pSerCtx);
+      if(bSerialActive)
+      {
+         serial_set_params(pSerCtx, &ttyParams);
+      }
    }
 }
 
@@ -668,9 +718,72 @@ static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event)
    {
       char numStr[20];
       lv_ddlist_get_selected_str(ddlist, numStr, sizeof(numStr));
-      ttyBaud = atol(numStr);
+      ttyParams.baud = atol(numStr);
    }
 }
+
+static void ddl_databits_event_cb(lv_obj_t * ddlist, lv_event_t event)
+{
+   if(event == LV_EVENT_PRESSED)
+   {
+      lv_obj_set_top(ddlist, true);
+   }
+   else if(event == LV_EVENT_VALUE_CHANGED)
+   {
+      char str[20];
+      lv_ddlist_get_selected_str(ddlist, str, sizeof(str));
+      ttyParams.databits = (uint8_t)(str[0] == '0');
+   }
+}
+
+static void ddl_parity_event_cb(lv_obj_t * ddlist, lv_event_t event)
+{
+   if(event == LV_EVENT_PRESSED)
+   {
+      lv_obj_set_top(ddlist, true);
+   }
+   else if(event == LV_EVENT_VALUE_CHANGED)
+   {
+      // NOTE this relies on order of tokens in ddOptionsParity
+      uint16_t index = lv_ddlist_get_selected(ddlist);
+      switch(index)
+      {
+      case 0:
+         ttyParams.parity = PARITY_NONE;
+         break;
+      case 1:
+         ttyParams.parity = PARITY_SPACE;
+         break;
+      case 2:
+         ttyParams.parity = PARITY_EVEN;
+         break;
+      case 3:
+         ttyParams.parity = PARITY_ODD;
+         break;
+      }
+   }
+}
+
+static void ddl_stopbits_event_cb(lv_obj_t * ddlist, lv_event_t event)
+{
+   if(event == LV_EVENT_PRESSED)
+   {
+      lv_obj_set_top(ddlist, true);
+   }
+   else if(event == LV_EVENT_VALUE_CHANGED)
+   {
+      uint16_t index = lv_ddlist_get_selected(ddlist);
+      if(index == 0)
+      {
+         ttyParams.stopbits = STOPBITS_1;
+      }
+      else
+      {
+         ttyParams.stopbits = STOPBITS_2;
+      }
+   }
+}
+
 
 
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event)
@@ -720,7 +833,7 @@ static void parseSerial(char* msg)
    {
       pTok = strtok(NULL, delims);
 
-      int val = strtol(pTok, NULL, 10);
+      int32_t val = strtol(pTok, NULL, 10);
 
       if(val <= lv_slider_get_max_value(slider))
       {

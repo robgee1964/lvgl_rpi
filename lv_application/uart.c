@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <unistd.h>
 #include <pthread.h>
@@ -21,9 +22,9 @@
  * Encapsulates a serial connection.
  */
 struct serial_s {
-   int fd;                  //>! Connection file descriptor.
-   int state;               //>! Signifies connection state.
-   int running;             //>! Signifies thread state.
+   int32_t fd;                  //>! Connection file descriptor.
+   int32_t state;               //>! Signifies connection state.
+   int32_t running;             //>! Signifies thread state.
    void (*pRxCallback)(char* pMsg);
    volatile char rxbuff[BUFF_SIZE];  //>! Buffer for RX data.
    volatile bool bAvailable;
@@ -32,7 +33,7 @@ struct serial_s {
 
 // ---------------        Internal Functions        ---------------
 
-static int serial_resolve_baud(int baud);
+static int32_t serial_resolve_baud(int32_t baud);
 
 /**
  * @brief Start the serial threads.
@@ -41,7 +42,7 @@ static int serial_resolve_baud(int baud);
  * @param s - serial structure.
  * @return 0 on success, or -1 on error.
  */
-static int serial_start(serial_t* s);
+static int32_t serial_start(serial_t* s);
 
 /**
  * Recieve data.
@@ -51,7 +52,7 @@ static int serial_start(serial_t* s);
  * @param maxLength - size of input buffer.
  * @return amount of data recieved.
  */
-static int serial_recieve(serial_t* obj, uint8_t data[], int maxLength);
+static int32_t serial_recieve(serial_t* obj, uint8_t data[], int32_t maxLength);
 
 static void serial_rx_callback(serial_t* s, char data[]);
 
@@ -72,7 +73,7 @@ static void *serial_data_listener(void *param);
  * @param s - serial structure.
  * @return 0;
  */
-static int serial_stop(serial_t* s);
+static int32_t serial_stop(serial_t* s);
 
 
 // ---------------        External Functions        ---------------
@@ -101,15 +102,15 @@ void serial_destroy(serial_t* s)
 
 
 //Connect to serial device.
-int serial_connect(serial_t* s, char device[], int baud)
+int32_t serial_connect(serial_t* s, char device[], int32_t baud)
 {
    struct termios oldtio;
 
    // Resolve baud.
-   int speed = serial_resolve_baud(baud);
+   int32_t speed = serial_resolve_baud(baud);
    if (speed < 0) {
       printf("Error: Baud rate not recognized.\r\n");
-      return -1;
+      return -3;
    }
 
    //Open device.
@@ -117,7 +118,7 @@ int serial_connect(serial_t* s, char device[], int baud)
    //Catch file open error.
    if (s->fd < 0) {
       perror(device);
-      return -2;
+      return -1;
    }
    //Retrieve settings.
    tcgetattr(s->fd, &oldtio);
@@ -131,11 +132,11 @@ int serial_connect(serial_t* s, char device[], int baud)
    tcsetattr(s->fd, TCSANOW, &oldtio);
 
    //Start listener thread.
-   int res = serial_start(s);
+   int32_t res = serial_start(s);
    //Catch error.
    if (res < 0) {
       printf("Error: serial thread could not be spawned\r\n");
-      return -3;
+      return -2;
    }
 
    //Indicate connection was successful.
@@ -144,19 +145,98 @@ int serial_connect(serial_t* s, char device[], int baud)
 }
 
 
-int serial_set_params(serial_t* s, ser_param_t* pParam)
+int32_t serial_set_params(serial_t* s, ser_param_t* pParam)
 {
+   if(s->fd < 0)
+   {
+      return -1;  // fail if port not open
+   }
+   struct termios tio;
+   //Retrieve settings.
+   tcgetattr(s->fd, &tio);
 
+   int32_t speed = serial_resolve_baud(pParam->baud);
+
+   if (speed < 0) {
+      printf("Error: Baud rate not recognized\n");
+      return -3;
+   }
+
+   if((pParam->databits < 5) || (pParam->databits > 8))
+   {
+      printf("Error: invalid data bits\n");
+   }
+
+   // setbaudrate
+   cfsetspeed(&tio, speed);
+
+   // set stop bits
+   if(pParam->stopbits ==  STOPBITS_1)
+   {
+      tio.c_cflag &= ~CSTOPB;
+   }
+   else if(pParam->stopbits == STOPBITS_2)
+   {
+      tio.c_cflag |= CSTOPB;
+   }
+
+   // set data bits
+   uint32_t maskc = ~(CS5 | CS6 | CS7 | CS8);
+   uint32_t masks;
+   switch(pParam->databits)
+   {
+   case 5:
+      masks = CS5;
+      break;
+   case 6:
+      masks = CS6;
+      break;
+   case 7:
+      masks = CS7;
+      break;
+   case 8:
+      masks = CS8;
+      break;
+   default:
+      maskc = 0xffffffffUL;
+      masks = 0UL;
+      break;
+   }
+   tio.c_cflag &= maskc;
+   tio.c_cflag |= masks;
+
+   // set parity
+   switch(pParam->parity)
+   {
+   case PARITY_NONE:
+   case PARITY_SPACE:
+      tio.c_cflag &= (PARENB | PARODD);
+      break;
+
+   case PARITY_EVEN:
+      tio.c_cflag &= ~PARODD;
+      tio.c_cflag |= PARENB;
+      break;
+
+   case PARITY_ODD:
+      tio.c_cflag |= PARODD;
+      tio.c_cflag |= PARENB;
+      break;
+   }
+
+   tcsetattr(s->fd, TCSANOW, &tio);
+
+   return 0;
 }
 
 //Send data.
-int serial_send(serial_t* s, const uint8_t data[], int length)
+int32_t serial_send(serial_t* s, const uint8_t data[], int32_t length)
 {
    if(s->fd < 0)
    {
       return -1;
    }
-   int res = write(s->fd, data, length);
+   int32_t res = write(s->fd, data, length);
    return res;
 }
 
@@ -169,9 +249,9 @@ void serial_put(serial_t* s, uint8_t data)
 
 
 //Fetch a message
-int serial_gets(serial_t* s, char* pBuf)
+int32_t serial_gets(serial_t* s, char* pBuf)
 {
-   int count = -1;
+   int32_t count = -1;
    if(s->fd < 0)
    {
       return count;
@@ -192,7 +272,7 @@ void serial_clear(serial_t* s)
 }
 
 //Close serial port.
-int serial_close(serial_t* s)
+int32_t serial_close(serial_t* s)
 {
    if(s->fd <0)
    {
@@ -207,16 +287,16 @@ int serial_close(serial_t* s)
 // ---------------        Internal Functions        --------------
 
 //Stop serial listener thread.
-static int serial_stop(serial_t* s)
+static int32_t serial_stop(serial_t* s)
 {
    s->running = 0;
    return 0;
 }
 
 // Resolves standard baud rates to linux constants.
-static int serial_resolve_baud(int baud)
+static int32_t serial_resolve_baud(int32_t baud)
 {
-   int speed;
+   int32_t speed;
    // Switch common baud rates to temios constants.
    switch (baud) {
    case 9600:
@@ -243,14 +323,14 @@ static int serial_resolve_baud(int baud)
 }
 
 // Start serial listener.
-static int serial_start(serial_t* s)
+static int32_t serial_start(serial_t* s)
 {
    //Only start if it is not currently running.
    if (s->running != 1) {
       //Set running.
       s->running = 1;
       //Spawn thread.
-      int res;
+      int32_t res;
       res = pthread_create(&s->rx_thread, NULL, serial_data_listener, (void*) s);
       if (res != 0) {
          return -2;
@@ -265,7 +345,7 @@ static int serial_start(serial_t* s)
 
 
 //Recieve data.
-static int serial_recieve(serial_t* s, uint8_t data[], int maxLength)
+static int32_t serial_recieve(serial_t* s, uint8_t data[], int32_t maxLength)
 {
    return read(s->fd, data, maxLength);
 }
@@ -285,8 +365,8 @@ static void serial_rx_callback(serial_t* s, char data[])
 //Serial data listener thread.
 static void *serial_data_listener(void *param)
 {
-   int res = 0;
-   int err = 0;
+   int32_t res = 0;
+   int32_t err = 0;
    struct pollfd ufds;
    uint8_t buff[BUFF_SIZE];
 
@@ -295,7 +375,7 @@ static void *serial_data_listener(void *param)
 
    //Run until ended.
    while (serial->running != 0) {
-      int count = serial_recieve(serial, buff, BUFF_SIZE - 1);
+      int32_t count = serial_recieve(serial, buff, BUFF_SIZE - 1);
       //If data was recieved.
       if (count > 0) {
          //Pad end of buffer to ensure there is a termination symbol.

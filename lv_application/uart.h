@@ -15,9 +15,16 @@ extern "C" {
 
    typedef struct serial_s serial_t;
 
+   typedef enum {STOPBITS_1, STOPBITS_2} stopbits_t;
+
+   typedef enum {PARITY_NONE, PARITY_SPACE, PARITY_EVEN, PARITY_ODD} parity_t;
+
    typedef struct
    {
-
+      int32_t baud;
+      stopbits_t stopbits;
+      parity_t parity;
+      uint8_t databits;
    }ser_param_t ;
 
    /**
@@ -40,7 +47,7 @@ extern "C" {
     * @param baud - baud rate for connection.
     * @return -ve on error, 0 on success.
     */
-   int serial_connect(serial_t* s, char device[], int baud);
+   int32_t serial_connect(serial_t* s, char device[], int32_t baud);
 
    /**
     * Set port parameters.
@@ -48,7 +55,7 @@ extern "C" {
     * @param pParam - pointer to struct containing baud, data len, parity etc.
     * @param length - size of the data array.
     */
-   int serial_set_params(serial_t* s, ser_param_t* pParam);
+   int32_t serial_set_params(serial_t* s, ser_param_t* pParam);
    /**
     * Send data.
     * @param s - serial structure.
@@ -56,7 +63,7 @@ extern "C" {
     * @param length - size of the data array.
     */
 
-   int serial_send(serial_t* s, const uint8_t data[], int length);
+   int32_t serial_send(serial_t* s, const uint8_t data[], int32_t length);
 
    /**
     * Send a single character.
@@ -70,7 +77,7 @@ extern "C" {
     * @param s - serial structure.
     * @return character. Null if empty.
     */
-   int serial_gets(serial_t* s, char* pBuf);
+   int32_t serial_gets(serial_t* s, char* pBuf);
 
    /**
     * Clear the serial buffer.
@@ -83,7 +90,7 @@ extern "C" {
     * @param s - serial structure.
     * @return value of close().
     */
-   int serial_close(serial_t* s);
+   int32_t serial_close(serial_t* s);
 
 #ifdef __cplusplus
 }
