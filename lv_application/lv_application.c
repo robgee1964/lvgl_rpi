@@ -156,7 +156,7 @@ static int32_t sbWidth;
 
 static const char* sbLabels[NUM_SIDEBAR_BUTTONS] = {APP_HOME_SYMBOL, APP_CHART_SYMBOL, APP_SETTINGS_SYMBOL, NULL, NULL};
 static const char* pBtnMB_OK[] = {"OK", ""};
-static const char ddOptionsBaud[] = "1200\n2400\n4800\n9600\n19200\n38400\n57600\n115200";
+static const char ddOptionsBaud[] = "9600\n19200\n38400\n57600\n115200";
 static const char ddOptionsDatabits[] = "5\n6\n7\n8";
 static const char ddOptionsParity[] = "none\nodd\neven\nspace";
 static const char ddOptionsStopbits[] = "1\n2";
@@ -567,8 +567,10 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_obj_set_event_cb(ddListBaud, ddl_baud_event_cb);
 
    // create drop down list for parity
-   lv_obj_t * ddListParity = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_t * ddListParity = lv_ddlist_create(contSettings, NULL);
    lv_obj_align(ddListParity, btnPort, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_fix_width(ddListParity, 150);
+   lv_ddlist_set_draw_arrow(ddListParity, true);
    lv_ddlist_set_options(ddListParity, ddOptionsParity);
    // Set default selection - this will break if enum values or sequence in ddOptionsParity change
    lv_ddlist_set_selected(ddListParity, (uint16_t)ttyParams.parity);
@@ -579,8 +581,11 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_label_set_text(label, "Parity");
 
    // Create drop down list for data bits
-   lv_obj_t * ddListDatabits = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_t * ddListDatabits = lv_ddlist_create(contSettings, NULL);
    lv_obj_align(ddListDatabits, ddListBaud, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_fix_width(ddListDatabits, 150);
+   lv_ddlist_set_draw_arrow(ddListDatabits, true);
+
    lv_ddlist_set_options(ddListDatabits, ddOptionsDatabits);
    // set default selection, this will break if enum values or sequence in ddOptionsDatabits change
    lv_ddlist_set_selected(ddListDatabits, ttyParams.databits-5);
@@ -591,8 +596,10 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_label_set_text(label, "Data\nbits");
 
    // Create drop down list for stop bits
-   lv_obj_t * ddListStopbits = lv_ddlist_create(contSettings, ddListBaud);
+   lv_obj_t * ddListStopbits = lv_ddlist_create(contSettings, NULL);
    lv_obj_align(ddListStopbits, ddListParity, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_ddlist_set_fix_width(ddListStopbits, 150);
+   lv_ddlist_set_draw_arrow(ddListStopbits, true);
    lv_ddlist_set_options(ddListStopbits, ddOptionsStopbits);
    // set default selection, this will break if enum changes or sequence in ddOptionsStopbits
    lv_ddlist_set_selected(ddListStopbits, ttyParams.stopbits);
