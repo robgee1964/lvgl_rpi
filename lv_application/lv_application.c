@@ -64,6 +64,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <limits.h>
+#include "sin.h"
 #include "uart.h"
 #include "fs_abs.h"
 #include "uart.h"
@@ -82,7 +84,9 @@ LV_FONT_DECLARE(fontAwesomeExtra)
 #define BRIGHTNESS_FILE "/sys/class/backlight/rpi_backlight/brightness"
 #define BRIGHTNESS_MIN   30
 #define BRIGHTNESS_MAX   255
-#define SCREEN_SLEEP	 30000
+#define MIN_SCREEN_SLEEP    10
+#define DEF_SCREEN_SLEEP	 60
+#define MAX_SCREEN_SLEEP    600
 
 #define POWER_FILE "/sys/class/backlight/rpi_backlight/bl_power"
 #define POWER_ON 	0
@@ -96,6 +100,9 @@ LV_FONT_DECLARE(fontAwesomeExtra)
 #define DEF_PARITY         PARITY_NONE
 #define DEF_DATABITS       8
 
+#define DEMO_TIMEBASE      1000     // 1000ms per
+#define MAX_Y              150L
+
 /**********************
  *      TYPEDEFS
  **********************/
@@ -107,10 +114,12 @@ static bool openSerial(serial_t* pCtx);
 static void createControlScreen(int32_t left, int32_t bottom);
 static void createScopeScreen(int32_t left, int32_t bottom);
 static void createSettingScreen(int32_t left, int32_t bottom);
+static void load_tty_list_options(lv_obj_t * ddList);
 static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event);
 static void btn1_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn2_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event);
+static void btn_refresh_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
 static void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event);
@@ -119,9 +128,11 @@ static void ddl_databits_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_parity_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_stopbits_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void slider_event_cb(lv_obj_t * slider, lv_event_t event);
+static void sldSleep_event_cb(lv_obj_t * slider, lv_event_t event);
 static void LCD_Off(void);
 static void powerLCD(uint32_t power);
 static void parseSerial(char* msg);
+static void updateGraph(void);
 
 /**********************
  *  STATIC VARIABLES
@@ -135,12 +146,16 @@ static lv_obj_t * contSettings;
 static lv_obj_t * btnSidebar[NUM_SIDEBAR_BUTTONS];
 static lv_obj_t * lblMsg;
 static lv_obj_t * lblStatus;
+static lv_obj_t * ddListPort;
 
 static lv_style_t titleStyle;
 static lv_style_t lblOnBgStyle;
 static lv_style_t titleStyle;
 
+static lv_obj_t * chart;
 static lv_chart_series_t* dl1;
+
+static uint16_t numChartx;
 
 static char msg[30];
 static bool bLCDcontrol = true;
@@ -152,6 +167,9 @@ static bool bSerialActive = false;
 static ser_param_t ttyParams = {DEF_SERIAL_BAUD, DEF_STOPBITS, DEF_PARITY, DEF_DATABITS};
 static char ttyName[128] = DEF_SERIAL_PORT;
 
+static lv_obj_t * lblSleep;
+static uint32_t sleepTimeout = (DEF_SCREEN_SLEEP * 1000);
+
 static int32_t sbWidth;
 
 static const char* sbLabels[NUM_SIDEBAR_BUTTONS] = {APP_HOME_SYMBOL, APP_CHART_SYMBOL, APP_SETTINGS_SYMBOL, NULL, NULL};
@@ -161,9 +179,6 @@ static const char ddOptionsDatabits[] = "5\n6\n7\n8";
 static const char ddOptionsParity[] = "none\nodd\neven\nspace";
 static const char ddOptionsStopbits[] = "1\n2";
 
-/**********************
- *      MACROS
- **********************/
 
 /**********************
  *   GLOBAL FUNCTIONS
@@ -171,18 +186,11 @@ static const char ddOptionsStopbits[] = "1\n2";
 void app_tick(void)
 {
    char rxBuff[256];
-#if 0
-   if((lv_tick_elaps(lastTick) >= SCREEN_SLEEP) && (LCDpower == POWER_ON))
+
+   if((lv_disp_get_inactive_time(NULL) >=  sleepTimeout) && (LCDpower == POWER_ON))
    {
       LCD_Off();
    }
-#endif
-#if 1
-   if((lv_disp_get_inactive_time(NULL) >=  SCREEN_SLEEP) && (LCDpower == POWER_ON))
-   {
-      LCD_Off();
-   }
-#endif
    // Check for received messages from serial port
    if(serial_gets(pSerCtx, rxBuff) > 0)
    {
@@ -191,6 +199,12 @@ void app_tick(void)
       parseSerial(rxBuff);
 //		lv_obj_invalidate(lblMsg);
    }
+
+   if(dl1 != NULL)
+   {
+      updateGraph();
+   }
+
 
 }
 
@@ -474,17 +488,20 @@ static void createScopeScreen(int32_t left, int32_t bottom)
    /****************
     * CREATE A CHART
     ****************/
-   lv_obj_t * chart = lv_chart_create(contGraph, NULL);                   /*Create the chart*/
+   chart = lv_chart_create(contGraph, NULL);                   /*Create the chart*/
    lv_obj_set_size(chart, lv_obj_get_width_fit(contGraph), lv_obj_get_height_fit(contGraph));   /*Set the size*/
    lv_obj_align(chart, contGraph, LV_ALIGN_CENTER, 0, 0);
    lv_chart_set_series_width(chart, 2);                                     /*Set the line width*/
-   lv_chart_set_range(chart, -50, 50);
+   lv_chart_set_range(chart, -MAX_Y, MAX_Y);
    lv_chart_set_point_count(chart, 100);
-   lv_chart_set_div_line_count(chart, 10, 10);
+   lv_chart_set_div_line_count(chart, 9, 9);
    lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
 
+   numChartx = lv_obj_get_width_fit(chart);
+   lv_chart_set_point_count(chart, numChartx);
    /*Add a RED data series and set some points*/
    dl1 = lv_chart_add_series(chart, LV_COLOR_RED);
+   lv_chart_init_points(chart, dl1, 0);
 
    return;
 #if 0
@@ -504,6 +521,9 @@ static void createScopeScreen(int32_t left, int32_t bottom)
 #endif
 }
 
+#define SETTINGS_ROW_SPACING  (5*LV_DPI/8)
+#define SETTINGS_ROW(n)    ((n) * SETTINGS_ROW_SPACING)
+
 static void createSettingScreen(int32_t left, int32_t bottom)
 {
    contSettings = lv_cont_create(scr, NULL);
@@ -515,21 +535,22 @@ static void createSettingScreen(int32_t left, int32_t bottom)
 
    lv_obj_t *label = lv_label_create(contSettings, NULL);
    lv_obj_set_style(label, &titleStyle);
+   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_MID, 0, 10);
    lv_label_set_body_draw(label, true);
    lv_label_set_text(label, "Settings");
-   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_MID, 0, 10);
 
    label = lv_label_create(contSettings, NULL);
-   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_LEFT, LV_DPI/8, LV_DPI/2);
+   lv_obj_align(label, contSettings, LV_ALIGN_IN_TOP_LEFT, LV_DPI/8, SETTINGS_ROW_SPACING);
    lv_obj_set_width(label, LV_DPI/2);
    lv_obj_set_style(label, &lblOnBgStyle);
    lv_label_set_text(label, "Serial");
 
    // create drop downs for serial port
-   lv_obj_t *ddListPort = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/8, 0);
+   ddListPort = lv_ddlist_create(contSettings, NULL);
+   lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
    lv_ddlist_set_fix_width(ddListPort, 250);
    lv_ddlist_set_draw_arrow(ddListPort, true);
+   load_tty_list_options(ddListPort);
 
    lv_obj_t *btnPort = lv_btn_create(contSettings, NULL);
    lv_obj_set_size(btnPort, 3*LV_DPI/4, LV_DPI/3);
@@ -538,25 +559,25 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_label_set_text(lblBtn, "Open");
    lv_obj_set_event_cb(btnPort, btn_port_event_cb);
 
-   // Now populate list
-   char *ptty = ls_tty();
-   if(ptty != NULL)
-   {
-      lv_ddlist_set_options(ddListPort, ptty);
-      free(ptty);
-   }
+   lv_obj_t *btnRefresh = lv_btn_create(contSettings, NULL);
+   lv_obj_set_size(btnRefresh, 7*LV_DPI/8, LV_DPI/3);
+   lv_obj_align(btnRefresh, btnPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
+   lblBtn = lv_label_create(btnRefresh, NULL);
+   lv_label_set_text(lblBtn, "Refresh");
+   lv_obj_set_event_cb(btnRefresh, btn_refresh_event_cb);
+
    lvh_ddlist_set_selected_str(ddListPort, ttyName);
    lv_obj_set_event_cb(ddListPort, ddl_port_event_cb);
 
-   // create drop down for baud rate
+   // create drop down for baud rate. label = Serial
    lv_obj_t * label1 = lv_label_create(contSettings, NULL);
-   lv_obj_align(label1, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_align(label1, label, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_obj_set_width(label1, LV_DPI/2);
    lv_obj_set_style(label1, &lblOnBgStyle);
-   lv_label_set_text(label1, "Baud");
+   lv_label_set_text(label1, "Baud");  // label1 = Baud
 
    lv_obj_t * ddListBaud = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListBaud, ddListPort, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_align(ddListBaud, ddListPort, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
 
    lv_ddlist_set_options(ddListBaud, ddOptionsBaud);
    lv_ddlist_set_fix_width(ddListBaud, 150);
@@ -568,7 +589,7 @@ static void createSettingScreen(int32_t left, int32_t bottom)
 
    // create drop down list for parity
    lv_obj_t * ddListParity = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListParity, btnPort, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_align(ddListParity, btnPort, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_ddlist_set_fix_width(ddListParity, 150);
    lv_ddlist_set_draw_arrow(ddListParity, true);
    lv_ddlist_set_options(ddListParity, ddOptionsParity);
@@ -578,11 +599,11 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    // label for parity
    label = lv_label_create(contSettings, label1);
    lv_obj_align(label, ddListBaud, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
-   lv_label_set_text(label, "Parity");
+   lv_label_set_text(label, "Parity");  // label = Parity
 
    // Create drop down list for data bits
    lv_obj_t * ddListDatabits = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListDatabits, ddListBaud, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_align(ddListDatabits, ddListBaud, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_ddlist_set_fix_width(ddListDatabits, 150);
    lv_ddlist_set_draw_arrow(ddListDatabits, true);
 
@@ -592,12 +613,12 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_obj_set_event_cb(ddListDatabits, ddl_databits_event_cb);
    // label for databits
    label = lv_label_create(contSettings, label1);
-   lv_obj_align(label, label1, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
    lv_label_set_text(label, "Data\nbits");
+   lv_obj_align(label, label1, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
 
    // Create drop down list for stop bits
    lv_obj_t * ddListStopbits = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListStopbits, ddListParity, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI/3);
+   lv_obj_align(ddListStopbits, ddListParity, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_ddlist_set_fix_width(ddListStopbits, 150);
    lv_ddlist_set_draw_arrow(ddListStopbits, true);
    lv_ddlist_set_options(ddListStopbits, ddOptionsStopbits);
@@ -605,11 +626,45 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_ddlist_set_selected(ddListStopbits, ttyParams.stopbits);
    lv_obj_set_event_cb(ddListStopbits, ddl_stopbits_event_cb);
    // label for stopbits
-   label = lv_label_create(contSettings, label1);
-   lv_obj_align(label, ddListDatabits, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
-   lv_label_set_text(label, "Stop\nbits");
+   label1 = lv_label_create(contSettings, label);
+   lv_label_set_text(label1, "Stop\nbits");     // Label 1 = stop bits
+   lv_obj_align(label1, ddListDatabits, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
+
+   label1 = lv_label_create(contSettings, label);
+   lv_obj_align(label1, label, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
+   lv_label_set_text(label1, "Screen\ntimeout");
+
+
+   // Adjustment for screen timeout
+   lv_obj_t * sldSleep = lv_slider_create(contSettings, NULL);
+   lv_obj_set_size(sldSleep, lv_obj_get_width(contControl)/2 + LV_DPI/2, LV_DPI/3);
+   lv_obj_align(sldSleep, ddListDatabits, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
+   lv_slider_set_range(sldSleep, MIN_SCREEN_SLEEP, MAX_SCREEN_SLEEP);
+   lv_slider_set_value(sldSleep, DEF_SCREEN_SLEEP, LV_ANIM_OFF);
+   lv_obj_set_event_cb(sldSleep, sldSleep_event_cb);
+
+   lblSleep = lv_label_create(contSettings, NULL);
+   lv_obj_set_style(lblSleep, &lv_style_pretty_color);
+   lv_obj_align(lblSleep, btnRefresh, LV_ALIGN_IN_LEFT_MID, 0, 3*SETTINGS_ROW_SPACING);
+   sprintf(buff, "%d", sleepTimeout/1000);
+   lv_label_set_text(lblSleep, buff);
+
+   // TODO move screen brightness slider to here
+
 
 }
+
+static void load_tty_list_options(lv_obj_t * ddList)
+{
+   // Now populate list
+   char *ptty = ls_tty();
+   if(ptty != NULL)
+   {
+      lv_ddlist_set_options(ddList, ptty);
+      free(ptty);
+   }
+}
+
 
 
 static void btnSidebar_cb(lv_obj_t * btn, lv_event_t event)
@@ -677,6 +732,15 @@ static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event)
       }
    }
 }
+
+static void btn_refresh_event_cb(lv_obj_t * btn, lv_event_t event)
+{
+   if(event == LV_EVENT_RELEASED)
+   {
+      load_tty_list_options(ddListPort);
+   }
+}
+
 
 static void btn_wake_cb(lv_obj_t * button, lv_event_t event)
 {
@@ -804,6 +868,17 @@ static void slider_event_cb(lv_obj_t * slider, lv_event_t event)
    }
 }
 
+static void sldSleep_event_cb(lv_obj_t * slider, lv_event_t event)
+{
+   if(event == LV_EVENT_RELEASED)
+   {
+      char buff[20];
+      uint16_t slpSecs = lv_slider_get_value(slider);
+      sprintf(buff, "%d", slpSecs);
+      lv_label_set_text(lblSleep, buff);
+      sleepTimeout = slpSecs * 1000;
+   }
+}
 
 static void LCD_Off(void)
 {
@@ -854,6 +929,46 @@ static void parseSerial(char* msg)
       lv_disp_trig_activity(NULL);
    }
 
+}
+
+static void updateGraph(void)
+{
+   static uint16_t x = 0;
+   int16_t y;
+   uint16_t xm;
+   bool bNeg;
+   if(x <= 90)
+   {
+      bNeg = false;
+      xm = x;
+   }
+   else if (x <= 180)
+   {
+      bNeg = false;
+      xm = 180 - x;
+   }
+   else if (x <= 270)
+   {
+      bNeg = true;
+      xm = x - 180;
+   }
+   else if (x < 360)
+   {
+      bNeg = true;
+      xm = 360 - x;
+   }
+
+   y = (int16_t)(((MAX_Y * (uint32_t)sin1_16[xm]) + (1 << (SIN_DIV_SHIFT-1))) >> SIN_DIV_SHIFT);
+   if(bNeg)
+   {
+      y = -y;
+   }
+   if(++x >= 360)
+   {
+      x = 0;
+   }
+
+   lv_chart_set_next(chart, dl1, y);
 }
 
 #endif // LV_USE_APPLICATION
