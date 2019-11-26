@@ -121,7 +121,6 @@ static void btn2_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_port_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_refresh_event_cb(lv_obj_t * btn, lv_event_t event);
 static void btn_wake_cb(lv_obj_t * button, lv_event_t event);
-static void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_port_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_baud_event_cb(lv_obj_t * ddlist, lv_event_t event);
 static void ddl_databits_event_cb(lv_obj_t * ddlist, lv_event_t event);
@@ -137,7 +136,7 @@ static void updateGraph(void);
 /**********************
  *  STATIC VARIABLES
  **********************/
-static lv_obj_t * slider;
+static lv_obj_t * sldBrightness;
 static lv_obj_t * btnWake;
 static lv_obj_t * scr;
 static lv_obj_t * contControl;
@@ -151,6 +150,7 @@ static lv_obj_t * ddListPort;
 static lv_style_t titleStyle;
 static lv_style_t lblOnBgStyle;
 static lv_style_t titleStyle;
+static lv_style_t sliderIndStyle;
 
 static lv_obj_t * chart;
 static lv_chart_series_t* dl1;
@@ -252,17 +252,17 @@ void lv_application(void)
     * Now a Page is used which is an objects with scrollable content*/
    scr = lv_disp_get_scr_act(NULL);
 
+   lv_obj_set_style(scr, &lv_style_pretty_color);
+
+#if 0
    lv_obj_t * wp = lv_img_create(scr, NULL);
    lv_img_set_src(wp, "P:/blue-background.bin");
    lv_obj_set_pos(wp, 0, 0);
    lv_obj_set_protect(wp, LV_PROTECT_POS);
-
-//   return;
+#endif
 
 
    /* Create container down left hand side */
-   //lv_coord_t hres = lv_disp_get_hor_res(NULL);
-   //lv_coord_t vres = lv_disp_get_ver_res(NULL);
 
    lv_obj_t * contSidebar = lv_cont_create(scr, NULL);
    lv_obj_set_style(contSidebar, &lv_style_transp);
@@ -414,26 +414,14 @@ static void createControlScreen(int32_t left, int32_t bottom)
    lv_anim_create(&a);
 
 
-   /****************
-    * ADD A SLIDER
-    ****************/
-   slider = lv_slider_create(contControl, NULL);                            /*Create a slider*/
-   lv_obj_align(slider, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
-   lv_obj_set_size(slider, LV_DPI / 3, lv_obj_get_height(contControl) *2 / 3);            /*Set the size*/
-   lv_slider_set_range(slider, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
-   /*Set the current value*/
-   lv_slider_set_value(slider, LCDlevel, false);
-   lv_obj_set_event_cb(slider, slider_event_cb);
-
-
    /***********************
     * CREATE TWO BUTTONS
     ***********************/
    /*Create a button*/
    lv_obj_t * btn1 = lv_btn_create(contControl, NULL);         /*Create a button on the currently loaded screen*/
    lv_obj_set_event_cb(btn1, btn1_event_cb);                                  /*Set function to be called when the button is released*/
-   lv_obj_align(btn1, slider, LV_ALIGN_OUT_RIGHT_TOP, 30, 0);               /*Align below the label*/
    lv_obj_set_width(btn1, (LV_DPI*3)/2);
+   lv_obj_align(btn1, contControl, LV_ALIGN_IN_LEFT_MID, LV_DPI/2, 0);               /*Align below the label*/
 
    /*Create a label on the button (the 'label' variable can be reused)*/
    label = lv_label_create(btn1, NULL);
@@ -446,29 +434,16 @@ static void createControlScreen(int32_t left, int32_t bottom)
    lv_label_set_text(label, "Left Button");
    lv_obj_align(label, btn1, LV_ALIGN_CENTER, 0, 0);
 
-   /*Copy the previous button*/
+
    lv_obj_t * btn2 = lv_btn_create(contControl, NULL);                 /*Second parameter is an object to copy*/
    lv_obj_set_width(btn2, (LV_DPI*3)/2);
-   lv_obj_align(btn2, slider, LV_ALIGN_OUT_RIGHT_BOTTOM, 30, 0);    /*Align next to the prev. button.*/
+   lv_obj_align(btn2, contControl, LV_ALIGN_IN_RIGHT_MID, -LV_DPI/2, 0);    /*Align next to the prev. button.*/
    lv_obj_set_event_cb(btn2, btn2_event_cb);                                  /*Set function to be called when the button is released*/
 
    /*Create a label on the button*/
    label = lv_label_create(btn2, label);
    lv_label_set_text(label, "Right Button");
 
-   /* Label for the slider */
-   label = lv_label_create(contControl, NULL);
-   lv_label_set_text(label, "Brightness");
-   lv_obj_align(label, slider, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
-
-   /***********************
-    * ADD A DROP DOWN LIST
-    ************************/
-   lv_obj_t * ddlist = lv_ddlist_create(contControl, NULL);                     /*Create a drop down list*/
-   lv_obj_align(ddlist, label, LV_ALIGN_OUT_RIGHT_TOP, 50, 0);         /*Align next to the slider*/
-   lv_obj_set_top(ddlist, true);                                        /*Enable to be on the top when clicked*/
-   lv_ddlist_set_options(ddlist, "None\nLittle\nHalf\nA lot\nAll");     /*Set the options*/
-   lv_obj_set_event_cb(ddlist, ddlist_event_cb);                        /*Set function to call on new option is chosen*/
 
    return;
 }
@@ -547,14 +522,14 @@ static void createSettingScreen(int32_t left, int32_t bottom)
 
    // create drop downs for serial port
    ddListPort = lv_ddlist_create(contSettings, NULL);
-   lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
+   lv_obj_align(ddListPort, label, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
    lv_ddlist_set_fix_width(ddListPort, 250);
    lv_ddlist_set_draw_arrow(ddListPort, true);
    load_tty_list_options(ddListPort);
 
    lv_obj_t *btnPort = lv_btn_create(contSettings, NULL);
    lv_obj_set_size(btnPort, 3*LV_DPI/4, LV_DPI/3);
-   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
+   lv_obj_align(btnPort, ddListPort, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/3, 0);
    lv_obj_t* lblBtn = lv_label_create(btnPort, NULL);
    lv_label_set_text(lblBtn, "Open");
    lv_obj_set_event_cb(btnPort, btn_port_event_cb);
@@ -631,12 +606,18 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_obj_align(label1, ddListDatabits, LV_ALIGN_OUT_RIGHT_MID, LV_DPI/2, 0);
 
    label1 = lv_label_create(contSettings, label);
-   lv_obj_align(label1, label, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_label_set_text(label1, "Screen\ntimeout");
+   lv_obj_align(label1, label, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
 
 
    // Adjustment for screen timeout
    lv_obj_t * sldSleep = lv_slider_create(contSettings, NULL);
+   lv_style_copy(&sliderIndStyle, lv_slider_get_style(sldSleep, LV_SLIDER_STYLE_INDIC));
+   //sliderIndStyle.body.main_color = LV_COLOR_ORANGE;
+   sliderIndStyle.body.main_color = lv_color_make(0xff, 0xc1, 0x4d);
+   sliderIndStyle.body.grad_color = lv_color_make(0xb3,0x74,00);
+   lv_slider_set_knob_in(sldSleep, true);
+   lv_slider_set_style(sldSleep, LV_SLIDER_STYLE_INDIC, &sliderIndStyle);
    lv_obj_set_size(sldSleep, lv_obj_get_width(contControl)/2 + LV_DPI/2, LV_DPI/3);
    lv_obj_align(sldSleep, ddListDatabits, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
    lv_slider_set_range(sldSleep, MIN_SCREEN_SLEEP, MAX_SCREEN_SLEEP);
@@ -650,8 +631,17 @@ static void createSettingScreen(int32_t left, int32_t bottom)
    lv_label_set_text(lblSleep, buff);
 
    // TODO move screen brightness slider to here
+   sldBrightness = lv_slider_create(contSettings, sldSleep);                            /*Create a slider*/
+   //lv_obj_set_size(sldBrightness, lv_obj_get_width(contControl)/2 + LV_DPI/2, LV_DPI/3);
+   lv_obj_align(sldBrightness, sldSleep, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
+   lv_slider_set_range(sldBrightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+   /*Set the current value*/
+   lv_slider_set_value(sldBrightness, LCDlevel, false);
+   lv_obj_set_event_cb(sldBrightness, slider_event_cb);
 
-
+   label = lv_label_create(contSettings, label1);
+   lv_label_set_text(label, "Brightness");
+   lv_obj_align(label, label1, LV_ALIGN_IN_LEFT_MID, 0, SETTINGS_ROW_SPACING);
 }
 
 static void load_tty_list_options(lv_obj_t * ddList)
@@ -762,7 +752,7 @@ static  void ddlist_event_cb(lv_obj_t * ddlist, lv_event_t event)
    if(event == LV_EVENT_VALUE_CHANGED) {
       uint16_t opt = lv_ddlist_get_selected(ddlist);            /*Get the id of selected option*/
 
-      lv_slider_set_value(slider, (opt * 100) / 4, true);       /*Modify the slider value according to the selection*/
+      lv_slider_set_value(sldBrightness, (opt * 100) / 4, true);       /*Modify the slider value according to the selection*/
    }
 
 }
@@ -917,9 +907,9 @@ static void parseSerial(char* msg)
 
       int32_t val = strtol(pTok, NULL, 10);
 
-      if(val <= lv_slider_get_max_value(slider))
+      if(val <= lv_slider_get_max_value(sldBrightness))
       {
-         lv_slider_set_value(slider, val, LV_ANIM_ON);
+         lv_slider_set_value(sldBrightness, val, LV_ANIM_ON);
       }
    }
    else if(!strcmp(pTok, "wake"))
